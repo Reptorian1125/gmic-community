@@ -1061,10 +1061,13 @@ pt40y={(1^$ex)*$scale}
 -endl -a c -nm $nm -endl -done
 
 fastblur:
+-repeat {$!}
+-l[$<]
 (0.0579710145,0.1304347826,0.0579710145;0.1304347826,0.2463768116,0.1304347826;0.0579710145,0.1304347826,0.0579710145)
 -convolve[0] [1]
 -remove[-1]
-
+-endl
+-done
 iain_fast_despeckle:
 (0,0.2,0;0.2,0.2,0.2;0,0.2,0)
 --convolve[0] [1]
@@ -2056,6 +2059,947 @@ nm name($nm)
 
 #@gui Iain Fergusson
 
+#@gui Auto WB by hue variance: iain_auto_wb,iain_auto_wb_preview(1)
+#@gui : note = note{"Restrict analysis to this box"}
+#@gui : Corner 1 = point(5,5,0,1,255,255,255,128,10)
+#@gui : Corner 2 = point(95,95,0,1,255,255,255,128,10)
+#@gui : sep = separator()
+#@gui : Normalise = bool(1)
+#@gui : Negative = bool(0)
+#@gui : sep = separator()
+#@gui : note = note{"This filter finds the white balance of the image by maxiumising the variation of hues. The area for analysis should contain a range of hues. Do not try to select a neutral grey area."}
+iain_auto_wb_preview:
+-iain_auto_wb[0] $1,$2,$3,$4,$5,$6
+-rectangle[0] $1%,$2%,$3%,$4%,1,0xffff,255
+
+iain_auto_wb:
+-repeat $! -l[$>]
+-remove_opacity
+norm_out=$5
+repeats=15
+display_text=0
+rm_outliers=1
+max_pixels={2^16}
+
+lower_limit=5
+upper_limit=200
+
+
+--l[0] #reduce number of pixels to analyse
+
+	target_pixel_number={2^16}
+	-crop $1%,$2%,$3%,$4%
+	--l[0] -split c -max -endl
+
+	-fill[-1] if(i<$lower_limit||i>$upper_limit,0,1)
+	good_pixels={-1,is}
+	pixel_retention_ratio={$good_pixels/{wh}}
+	scale_factor={sqrt((($target_pixel_number/$pixel_retention_ratio)/{wh}))}
+
+	-if {$scale_factor<1}
+	-resize {w*$scale_factor},{h*$scale_factor},100%,100%,2
+	-endif
+
+	-gt[-1] 0
+	-add[0] 1
+	-mul[0] [-1]
+	-sub[0] 1
+	-rm[-1]
+	-split c
+	-unroll[0] x
+	-unroll[1] x
+	-unroll[2] x
+	-discard[0,1,2] x,-1
+	-append[0,1,2] c
+
+		--to_rgb[-1] 
+			-l[-1] #sort by colour numnber
+					-split c
+					-bsl[1] 8
+					-bsl[2] 16
+					-add
+			-endl
+
+		-reverse 
+		-append y 
+		-sort +,x 
+		-discard x 
+		-rows 1
+	-append c
+
+-endl
+
+#find base hue variation
+	--l[1]
+			-rgb2hsv -channels 0 --add[-1] 180 -mod[-1] 360
+			hv_old={min({0,iv},{1,iv})}
+		-rm
+	-endl
+
+
+hv_old_b=$hv_old
+hv_new_A_plus_B_plus=0
+hv_new_A_plus_B_minus=0
+hv_new_A_minus_B_plus=0
+hv_new_A_minus_B_minus=0
+shift_a=0
+shift_b=0
+step_size=3
+
+-repeat $repeats 
+shift_a_top=$shift_a
+
+# test A+step and B+step
+
+	--l[1]
+
+	 -iain_rgb_mix_wb[0] {$shift_a+$step_size},{$shift_b+$step_size}
+			-rgb2hsv -channels 0 	--add[-1] 180 -mod[-1] 360
+			hv_new_A_plus_B_plus={min({0,iv},{1,iv})}
+		-rm
+	-endl
+
+# test A+step and B-step
+
+	--l[1]
+	 -iain_rgb_mix_wb[0] {$shift_a+$step_size},{$shift_b-$step_size}
+			-rgb2hsv -channels 0 	--add[-1] 180 -mod[-1] 360
+			hv_new_A_plus_B_minus={min({0,iv},{1,iv})}
+		-rm
+	-endl
+
+# test A-step and B+step
+
+	--l[1]
+	 -iain_rgb_mix_wb[0] {$shift_a-$step_size},{$shift_b+$step_size}
+			-rgb2hsv -channels 0 	--add[-1] 180 -mod[-1] 360
+			hv_new_A_minus_B_plus={min({0,iv},{1,iv})}
+		-rm
+	-endl
+
+# test A-step and B-step
+
+	--l[1]
+	 -iain_rgb_mix_wb[0] {$shift_a-$step_size},{$shift_b-$step_size}
+			-rgb2hsv -channels 0 	--add[-1] 180 -mod[-1] 360
+			hv_new_A_minus_B_minus={min({0,iv},{1,iv})}
+		-rm
+	-endl
+
+
+hv_max={max($hv_old,$hv_new_A_plus_B_plus,$hv_new_A_plus_B_minus,$hv_new_A_minus_B_plus,$hv_new_A_minus_B_minus)}
+
+
+
+-if {$hv_old==$hv_max}
+
+# keep old
+
+-elif {$hv_new_A_plus_B_plus==$hv_max}
+ 
+shift_a={$shift_a+$step_size}
+shift_b={$shift_b+$step_size}
+hv_old=$hv_new_A_plus_B_plus
+
+-elif {$hv_new_A_plus_B_minus==$hv_max}
+ 
+shift_a={$shift_a+$step_size}
+shift_b={$shift_b-$step_size}
+hv_old=$hv_new_A_plus_B_minus
+
+-elif {$hv_new_A_minus_B_plus==$hv_max}
+ 
+shift_a={$shift_a-$step_size}
+shift_b={$shift_b+$step_size}
+hv_old=$hv_new_A_minus_B_plus
+
+-elif {$hv_new_A_minus_B_minus==$hv_max}
+ 
+shift_a={$shift_a-$step_size}
+shift_b={$shift_b-$step_size}
+hv_old=$hv_new_A_minus_B_minus
+
+-endif
+
+		step_size={$step_size/2}	
+
+		red_mul={round((2^$shift_a),0.1,0)}
+		blue_mul={round((2^$shift_b),0.1,0)}
+
+-done
+
+-iain_rgb_mix_wb[0] $shift_a,$shift_b
+-k[0]
+
+-if $norm_out
+-n 0,255
+-endif
+-c 0,255
+-if $6
+-negate
+-endif
+
+-endl
+-done
+
+
+iain_rgb_mix_wb:
+-remove_opacity
+-split c
+-mul[0] {2^$1}
+-mul[2] {2^$2}
+-append c
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+
+#@gui 2D_scopes: iain_2d_scopes,iain_2d_scopes(1)
+#@gui : Y axis = choice (1,"Yuv","yUv","yuV","Hsv","hSv","hsV","Lab","lAb","laB","lCh","lcH","Cmyk","cMyk","cmYk","cmyK","Rgb","rGb","rgB")
+#@gui : X axis = choice (2,"Yuv","yUv","yuV","Hsv","hSv","hsV","Lab","lAb","laB","lCh","lcH","Cmyk","cMyk","cmYk","cmyK","Rgb","rGb","rgB")
+#@gui : Type = Choice(2,"Dots","Circles","Circles scaled by Luma","Heat map")
+#@gui : Colour bits = int(6,1,8)
+#@gui : Plot size = int(512,64,1024)
+#@gui : Max samples = int(2048,16,4096)
+#@gui : Chart elements = choice(1,"no info","axes","underlay")
+#@gui : Generate test colours = bool (0)
+#@gui : Mirror Y axis = bool (0)
+#@gui : Mirror X axis = bool (0)
+#@gui : Rotate = choice (0,"0","90","180","270")
+iain_2d_scopes:
+-repeat $! -l[$>]
+-remove_opacity
+
+y_axis=$1
+x_axis=$2
+plot_type=$3
+resolution=$4
+plot_size=$5
+max_samples=$6
+
+chart_type=$7
+test_pattern=$8
+
+mirror_y=$9
+mirror_x=$10
+
+rotate_deg={$11*90}
+
+
+-if {$plot_type==3}
+remove_duplicates=0
+-else
+remove_duplicates=1
+-endif
+
+
+
+luma_sort=1
+
+
+
+# generate test pattern
+
+-if $test_pattern
+-rm
+cube_d={2^$resolution}
+$cube_d,$cube_d,$cube_d
+-to_rgb
+-split c
+-fill[0] x
+-fill[1] y
+-fill[2] z
+-n 0,255
+-append c
+-split z
+-append_tiles 0,0
+	-split y
+	-append x
+
+-endif
+
+
+-split y
+-append x
+
+-if {w>$max_samples}
+-resize $max_samples,1
+-endif
+# bit depth reducation, remove duplicates colours, sort by luma
+
+
+	-bsr[0] {8-$resolution}
+
+-if $remove_duplicates
+
+	--to_rgb[-1] 
+		-l[-1] #sort by colour numnber
+				-split c
+				-bsl[1] 8
+				-bsl[2] 16
+				-add
+		-endl
+
+	-reverse 
+	-append y 
+	-sort +,x 
+	-discard x 
+	-rows 1
+-endif
+	
+-if $luma_sort
+	--luminance[-1] 
+	## --norm[-1]
+	## --l[-1] -split c -max -endl
+	-reverse 
+	-append y 
+	-sort +,x 
+	-rows 1
+-endif	
+	
+	
+-bsl {8-$resolution} # scale back to better range
+
+
+
+# X-axis 
+
+--l[0]
+	-if {$x_axis==0}
+		-rgb2yuv8[0]
+		-channels[0] 0
+	-elif {$x_axis==1}
+		-rgb2yuv8[0]
+		-channels[0] 1
+	-elif {$x_axis==2}
+		-rgb2yuv8[0]
+		-channels[0] 2
+		
+		
+	-elif {$x_axis==3}
+		-rgb2hsv8[0]
+		-channels[0] 0
+	-elif {$x_axis==4}
+		-rgb2hsv8[0]
+		-channels[0] 1
+	-elif {$x_axis==5}
+		-rgb2hsv8[0]
+		-channels[0] 2
+	
+
+	-elif {$x_axis==6}
+		-rgb2lab8[0]
+		-channels[0] 0
+	-elif {$x_axis==7}
+		-rgb2lab8[0]
+		-channels[0] 1
+	-elif {$x_axis==8}
+		-rgb2lab8[0]
+		-channels[0] 2
+	
+	-elif {$x_axis==9}
+		-rgb2lch8[0]
+		-channels[0] 1
+	
+	-elif {$x_axis==10}
+		-rgb2lch8[0]
+		-channels[0] 2
+		
+		
+	-elif {$x_axis==11}
+		-rgb2cmyk[0]
+		-channels[0] 0
+	-elif {$x_axis==12}
+		-rgb2cmyk[0]
+		-channels[0] 1
+	-elif {$x_axis==13}
+		-rgb2cmyk[0]
+		-channels[0] 2
+	-elif {$x_axis==14}
+		-rgb2cmyk[0]
+		-channels[0] 3		
+		
+	-elif {$x_axis==15}
+		-channels[0] 0
+	-elif {$x_axis==16}
+		-channels[0] 1
+	-elif {$x_axis==17}
+		-channels[0] 2
+	-endif
+
+
+	
+-endl
+
+--l[0]
+	-if {$y_axis==0}
+		-rgb2yuv8[0]
+		-channels[0] 0
+	-elif {$y_axis==1}
+		-rgb2yuv8[0]
+		-channels[0] 1
+	-elif {$y_axis==2}
+		-rgb2yuv8[0]
+		-channels[0] 2
+		
+		
+	-elif {$y_axis==3}
+		-rgb2hsv8[0]
+		-channels[0] 0
+	-elif {$y_axis==4}
+		-rgb2hsv8[0]
+		-channels[0] 1
+	-elif {$y_axis==5}
+		-rgb2hsv8[0]
+		-channels[0] 2
+	
+
+	-elif {$y_axis==6}
+		-rgb2lab8[0]
+		-channels[0] 0
+	-elif {$y_axis==7}
+		-rgb2lab8[0]
+		-channels[0] 1
+	-elif {$y_axis==8}
+		-rgb2lab8[0]
+		-channels[0] 2
+	
+	-elif {$y_axis==9}
+		-rgb2lch8[0]
+		-channels[0] 1
+	
+	-elif {$y_axis==10}
+		-rgb2lch8[0]
+		-channels[0] 2
+
+	-elif {$y_axis==11}
+		-rgb2cmyk[0]
+		-channels[0] 0
+	-elif {$y_axis==12}
+		-rgb2cmyk[0]
+		-channels[0] 1
+	-elif {$y_axis==13}
+		-rgb2cmyk[0]
+		-channels[0] 2
+	-elif {$y_axis==14}
+		-rgb2cmyk[0]
+		-channels[0] 3	
+		
+	-elif {$y_axis==15}
+		-channels[0] 0
+	-elif {$y_axis==16}
+		-channels[0] 1
+	-elif {$y_axis==17}
+		-channels[0] 2
+	-endif
+	
+-endl
+
+
+
+
+
+	-mul[-1,-2] {$plot_size/256} # scale values to plot dimensions
+	
+
+				
+				$plot_size,$plot_size,1,1,0
+				-to_rgb[-1]
+				-fill[-1] -1
+				-repeat {0,w}
+				
+					# plot type 
+						-if {$plot_type==0}
+							-point[-1] {1,i($>)},{2,i($>)},0,1,{0,i($>,0,0,0)},{0,i($>,0,0,1)},{0,i($>,0,0,2)}
+						-elif {$plot_type==1}
+						
+							-circle[-1] {1,i($>)},{2,i($>)},0.3%,1,{0,i($>,0,0,0)},{0,i($>,0,0,1)},{0,i($>,0,0,2)}
+						
+						
+						-elif {$plot_type==2}
+							
+							circle_size={max({$<*(1/{0,w})},0.15)}
+							
+							-circle[-1] {1,i($>)},{2,i($>)},$circle_size%,1,{0,i($>,0,0,0)},{0,i($>,0,0,1)},{0,i($>,0,0,2)}
+					
+						-elif {$plot_type==3}
+									
+							-l[0]
+							-rgb2hsv -split c -fill[-1] 1 -append c -hsv2rgb
+							-endl
+			
+							circle_size={1}
+							
+							-circle[-1] {1,i($>)},{2,i($>)},$circle_size%,0.1,{0,i($>,0,0,0)},{0,i($>,0,0,1)},{0,i($>,0,0,2)}
+							
+							
+						-endif
+				-done
+			
+				
+-k[-1]
+			
+	
+			
+
+
+-if {$chart_type!=0}
+
+100%,100%,1,1
+-fill[-1] x
+			-n[-1] 0,255		
+	-l[-1]		
+		-if {$x_axis==0}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-append c
+		-yuv82rgb
+	-elif {$x_axis==1}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 2
+		-append c
+		-yuv82rgb
+	-elif {$x_axis==2}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 3
+		-append c
+		-yuv82rgb
+		
+	-elif {$x_axis==3}
+		--fill[0] {255}
+		--fill[0] {255}
+		-append c
+		-hsv82rgb
+	-elif {$x_axis==4}
+		--fill[0] {255}
+		--fill[0] {255}
+		-move[0] 2
+		-append c
+		-hsv82rgb
+	-elif {$x_axis==5}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 3
+		-append c
+		-hsv82rgb
+		
+	-elif {$x_axis==6}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 1
+		-append c
+		-lab82rgb
+	-elif {$x_axis==7}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 2
+		-append c
+		-lab82rgb
+	-elif {$x_axis==8}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 3
+		-append c
+		-lab82rgb
+	
+	-elif {$x_axis==9}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 2
+		-append c
+		-lch82rgb
+	
+	-elif {$x_axis==10}
+		--fill[0] 180
+		--fill[0] 128
+		-move[0] 3
+		-append c
+		-lch82rgb
+		
+		
+	-elif {$x_axis==11}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 1
+		-append c
+		-cmyk2rgb
+	-elif {$x_axis==12}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 2
+		-append c
+		-cmyk2rgb
+	-elif {$x_axis==13}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 3
+		-append c
+		-cmyk2rgb
+	-elif {$x_axis==14}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 4
+		-append c
+		-cmyk2rgb	
+		
+	-elif {$x_axis==15}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 1
+		-append c
+	-elif {$x_axis==16}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 2
+		-append c
+	-elif {$x_axis==17}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 3
+		-append c
+	-endif		
+	-endl	
+
+100%,100%,1,1
+-fill[-1] y
+			-n[-1] 0,255	
+	-l[-1]		
+		-if {$y_axis==0}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-append c
+		-yuv82rgb
+	-elif {$y_axis==1}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 2
+		-append c
+		-yuv82rgb
+	-elif {$y_axis==2}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 3
+		-append c
+		-yuv82rgb
+		
+	-elif {$y_axis==3}
+		--fill[0] {255}
+		--fill[0] {255}
+		-append c
+		-hsv82rgb
+	-elif {$y_axis==4}
+		--fill[0] {255}
+		--fill[0] {255}
+		-move[0] 2
+		-append c
+		-hsv82rgb
+	-elif {$y_axis==5}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 3
+		-append c
+		-hsv82rgb
+		
+	-elif {$y_axis==6}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 1
+		-append c
+		-lab82rgb
+	-elif {$y_axis==7}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 2
+		-append c
+		-lab82rgb
+	-elif {$y_axis==8}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 3
+		-append c
+		-lab82rgb
+	
+	-elif {$y_axis==9}
+		--fill[0] {255/2}
+		--fill[0] {255/2}
+		-move[0] 2
+		-append c
+		-lch82rgb
+	
+	-elif {$y_axis==10}
+		--fill[0] 180
+		--fill[0] 128
+		-move[0] 3
+		-append c
+		-lch82rgb
+		
+		
+	-elif {$y_axis==11}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 1
+		-append c
+		-cmyk2rgb
+	-elif {$y_axis==12}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 2
+		-append c
+		-cmyk2rgb
+	-elif {$y_axis==13}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 3
+		-append c
+		-cmyk2rgb
+	-elif {$y_axis==14}
+		--fill[0] {0}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 4
+		-append c
+		-cmyk2rgb	
+		
+	-elif {$y_axis==15}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 1
+		-append c
+	-elif {$y_axis==16}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 2
+		-append c
+	-elif {$y_axis==17}
+		--fill[0] {0}
+		--fill[0] {0}
+		-move[0] 3
+		-append c
+	-endif		
+	-endl	
+
+
+-if {$chart_type==1}
+
+100%,100%
+100%,100%
+-linethick[-1] 50%,0,50%,100%,{$plot_size*.01},1,1
+-linethick[-2] 0%,50%,100%,50%,{$plot_size*.01},1,1
+-mul[1,3]
+-mul[2,3]
+
+	-endif
+-blend[-1,-2] average
+		
+-if {$chart_type==1}
+-l[-1]
+--l[0] split c -max -endl
+-gt[-1] 0
+-replace[-1] 1,128
+-laplacian[-1]
+-abs
+-max
+-endl
+
+-endif
+		
+		
+--eq[0] -1
+-l[-1] -split c -min  -erode_circ {round($plot_size*.1)} -blur {$plot_size*.025} -endl
+
+-mul[-1,-2]
+
+
+
+
+-endif
+
+-max
+
+-if $mirror_y
+-mirror y
+-endif
+-if $mirror_x
+-mirror x
+-endif
+
+-rotate $rotate_deg
+
+		-endl -done
+
+
+
+#@gui Split Detials [Orientation] : iain_split_orientation,iain_split_orientation_preview(0)
+#@gui : Center (%) = point(75,50,0,1)
+#@gui : Angle range = int (45,1,90)
+#@gui : Residual size = float (10,0,50)
+#@gui : Snap to angle = int (5,0,45)
+#@gui : Angle transition = int (5,0,45)
+#@gui : Preview line only = bool(0)
+#@gui : Top Layer = choice(0,"Isolate orientation","Remove orientation")
+#@gui : Output = choice(1,"Isolated/Removed only","Isolated/Removed & Residual","Residual only")
+iain_split_orientation_preview:
+-if $7
+-iain_draw_angle $1,$2,$5
+-else
+-iain_split_orientation $1,$2,$3,$4,$5,$6,$7,$8,$9
+## -image_statistics
+-iain_draw_angle $1,$2,$5
+-endif
+
+
+
+iain_split_orientation:
+residual=$4
+snap=$5
+cutoff_steepness=$6
+
+x_point={($1-50)/100}
+y_point={($2-50)/100}
+angle_rad={-1*(atan($x_point/$y_point))}
+-if $8
+angle_rad={$angle_rad+(pi/2)}
+-endif
+angle_deg={$angle_rad/pi*180}
+angle_deg_snap={round(($angle_deg+180),$snap)-180}
+angle_rad_snap={$angle_deg_snap/180*pi}
+
+radians={$angle_rad_snap+(pi/2)}
+width={($3/180)*pi}
+-if $8
+width={((180-$3)/180)*pi}
+-endif
+-remove_opacity
+--blur[0] $residual
+-sub[0] [-1]
+100%,100%
+		-fill[-1] ($radians+atan((0.5-(x/w))/(0.5-(y/h)))-$width/2)%pi
+		low_angle={pi-$width}
+		high_angle={pi+$width}
+		-fill[-1] if($high_angle>i&&i>$low_angle,1,0)
+		radians=$radians+($width)
+
+--fftpolar[0]
+-blur_angular[2] $cutoff_steepness
+-c[2] 0,1
+
+## -circle[2] 50%,50%,3,1,1
+-mul[3] [2]
+-rm[2]
+-ifftpolar[-1,-2]
+-sub[0] [-1]
+-add[0,1]
+-reverse
+
+-if {$9==0}
+-k[0]
+-add[0] 128
+-elif {$9==1}
+-add[0] 128
+-nm[0] "mode(grainmerge), name"
+-elif {$9==2}
+-k[1]
+-endif
+
+iain_draw_angle:
+
+-repeat $!
+-l[$<]
+snap=$3
+## -channels 0
+
+--l[0]
+-remove_opacity
+-fill 0
+x_point={($1-50)/100}
+y_point={($2-50)/100}
+
+angle_rad={-1*(atan($x_point/$y_point))}
+angle_deg={$angle_rad/pi*180}
+angle_deg_snap={round(($angle_deg+180),$snap)-180}
+angle_rad_snap={$angle_deg_snap/180*pi}
+-if {(sin($angle_rad))==0} angle_rad=0$angle_rad+.0001 -endif
+-if {(cos($angle_rad))==0} angle_rad=0$angle_rad+.0001 -endif
+hypotenuse_x={$x_point/(sin($angle_rad))}  
+hypotenuse_y={$y_point/(cos($angle_rad))}
+line_x={((sin($angle_rad)*$hypotenuse_x)+0.5)*w}
+line_y={((cos($angle_rad)*$hypotenuse_y)+0.5)*h}
+line_x_snap={((sin($angle_rad_snap)*($hypotenuse_x))+0.5)*w}
+line_y_snap={((cos($angle_rad_snap)*($hypotenuse_y))+0.5)*h}
+text_hyp_x={$hypotenuse_x+(sign($hypotenuse_x)*0.05)}
+text_hyp_y={$hypotenuse_y+(sign($hypotenuse_y)*0.05)}
+text_x={((sin($angle_rad_snap)*($text_hyp_x))+0.5)*w}
+text_y={((cos($angle_rad_snap)*($text_hyp_y))+0.5)*h}
+poly_hyp_x={sign($hypotenuse_x)}
+poly_hyp_y={sign($hypotenuse_y)}
+poly_x1={((sin($angle_rad_snap)*($poly_hyp_x))+0.5)*w}
+poly_y1={((cos($angle_rad_snap)*($poly_hyp_y))+0.5)*h}
+poly_x2={((sin($angle_rad)*($poly_hyp_x))+0.5)*w}
+poly_y2={((cos($angle_rad)*($poly_hyp_y))+0.5)*h}
+
+100%,100%,1,1,0
+-rm[0]
+-circle[-1] 50%,50%,{abs($hypotenuse_x)*w},1,255,255,255,255
+-circle[-1] 50%,50%,{(abs($hypotenuse_x)*w)-2},1,0,0,0,255
+100%,100%,1,1,0
+-polygon[-1] 3,50%,50%,$poly_x1,$poly_y1,$poly_x2,$poly_y2,1,1
+-mul[-1] [-2]
+-rm[-2]
+[-1]
+--iain_draw_conical_lines[-1] 6,3
+-mul[-1,-3]
+-mul[-1] {80/255}
+-to_rgb[-2]
+-append[-1,-2] c
+100%,100%,1,1,0
+-linethick[-1] 50%,50%,$line_x,$line_y,2,1,255
+-linethick[-1] 50%,50%,$line_x_snap,$line_y_snap,2,1,255
+--iain_draw_radial_lines[-1] 8,4
+-mul[-1,-2]
+100%,100%,1,1,0
+-linethick[-1] 50%,50%,$line_x,$line_y,2,1,80
+-linethick[-1] 50%,50%,$line_x_snap,$line_y_snap,2,1,160
+-to_rgb[-2]
+-append[-1,-2] c
+
+-max
+
+-text[-1] {round($angle_deg_snap,1)},$text_x,$text_y,17,1,255
+
+-endl
+-blend alpha
+-endl
+-done
+
+iain_draw_conical_lines:
+100%,100%,1,1
+-rm[0]
+
+radians=0
+width=0
+		-fill[0] ($radians+atan((0.5-(x/w))/(0.5-(y/h)))-$width/2)/pi*360
+-mod $1
+-lt $2
+
+iain_draw_radial_lines:
+100%,100%,1,1
+-rm[0]
+-set 1,50%,50%
+-distance 1
+-mod $1
+-lt $2
+
+
+
 
 #@gui Subtract Cast: iain_sub_cast,iain_sub_cast(0)
 #@gui : noise reduction = float (5,0,10)
@@ -2195,223 +3139,434 @@ fi
 
 
 
-#@gui Iain Denoise 2019 beta: iain_denoise_2019_beta,iain_denoise_2019_beta_preview(0)
+#@gui Iain Denoise 2019 beta3 : iain_denoise_2019_beta3,iain_denoise_2019_beta3_preview(0)
 ## #@gui : note = note("Adjust guide")
 #@gui : Gamma = float (1,.05,2)
 #@gui : Shadows = float (0,-1,1)
 #@gui : Light = float (0,-1,1)
-#@gui : Chroma = float(0.5,0,1)
-#@gui : Recover detials = bool(0)
+#@gui : Mid Offset = float (0,-0.5,0.5)
+#@gui : Desaturate = float(0.5,0,1)
+#@gui : Guide mix = float (1,0,1)
+#@gui : Soften Guide = bool (0)
+## #@gui : soften = float (5,0,30)
 ## #@gui : note = note("denoise")
 #@gui : Fine = float (5,0,30)
 #@gui : Mid = float (3,0,30)
 #@gui : Large = float (0,0,30)
-#@gui : Lookup = int (7,3,15)
+#@gui : Lookup = int (3,1,7)
 ## #@gui : note = note("recover")
-#@gui : Recover = float (0,0,4)
-#@gui : Test Patience = bool (0)
-#@gui : Show noise = choice (4,"All","Fine","Mid","Large","none")
-iain_denoise_2019_beta_preview:
+#@gui : Recovery = choice (0,"no recovery","fast recovery","slow recovery","guide recovery")
+#@gui : Recover = float (.5,0,2)
+
+#@gui : Preview shows = choice (4,"Noise","Fine Noise","Mid Noise","Large Noise","Output")
+#@gui : Preview Tones map = bool (0)
+
+
+
+iain_denoise_2019_beta3_preview:
 images={$!}
 
--if {$12==0}
---iain_denoise_2019_beta $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
--k[0,-1]
--sub
--c -64,64
--n 0,255
--elif {$12==1}
---iain_denoise_2019_beta $1,$2,$3,$4,$5,$6,0,0,$9,$10,$11,$12
--k[0,-1]
--sub
--c -64,64
--n 0,255
--elif {$12==2}
---iain_denoise_2019_beta $1,$2,$3,$4,$5,0,$7,0,$9,$10,$11,$12
--k[0,-1]
--sub
--c -64,64
--n 0,255
--elif {$12==3}
---iain_denoise_2019_beta $1,$2,$3,$4,$5,0,0,$8,$9,$10,$11,$12
--k[0,-1]
--sub
--c -64,64
--n 0,255
 
--elif {$12==4}
--iain_denoise_2019_beta $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+
+-if {$images>2}
+-k[0]
+-fill 128
+-text "too many input images",12,12,50,1,0
+-text "too many input images",10,10,50,1,255 
+-quit
 -endif
+
 -if {$images==1}
--text "internal guide",10,10,20,1,255
--text "internal guide",12,12,20,1,0
--elif {$images==2}
--text "external guide",10,10,20,1,255
--text "external guide",12,12,20,1,0
--elif {$images>2}
--text "too many input images",10,10,20,1,255
--text "too many input images",12,12,20,1,0
+[0]
+-endif
+-if $15
+--l[-1]
+mid_tone_offset={$4/-5}
+-luminance
+-add {$mid_tone_offset*255}		
+-resize 25%,25%,100%,100%,2
+-median 5
+-line  0,0,0,100%,1,128
+-line  0,0,100%,0,1,128
+-line  0,100%,100%,100%,1,128
+-line  100%,0,100%,100%,1,128
+## -blur 2
+--gt[0] 85
+--gt[0] 170
+-laplacian[1,2]
+-l[1]
+--gt[0] 0
+-lt[0] 0
+-replace[0] 1,100
+-replace[1] 1,1
+-max[0,1]
+-endl
+-l[2]
+--gt[0] 0
+-lt[0] 0
+-replace[0] 1,255
+-replace[1] 1,150
+-max[0,1]
+-endl
+-max[-1,-2]
+--neq[-1] 0
+-replace[-1] 1,255
+-append[-1,-2] c
+-scale2x[-1]
+-scale2x[-1]
+-k[-1]
+
+-endl
+
 -endif
 
-iain_denoise_2019_beta:
+
+
+
+-l[0,1]
+
+-if {$14==0}
+fine=$8
+mid=$9
+large=$10
+--iain_denoise_2019_beta3 $1,$2,$3,$4,$5,$6,$7,$fine,$mid,$large,$11,$12,$13,$14,$15
+-k[0,-1]
+-sub
+noise_amp={_round((128/(max(abs(im),iM))),0.1)}
+-mul $noise_amp
+-add 128
+-c 0,255
+-elif {$14==1}
+fine=$8
+mid=0
+large=0
+--iain_denoise_2019_beta3 $1,$2,$3,$4,$5,$6,$7,$fine,$mid,$large,$11,$12,$13,$14,$15$15
+-k[0,-1]
+-sub
+noise_amp={_round((128/(max(abs(im),iM))),0.1)}
+-mul $noise_amp
+-add 128
+-c 0,255
+
+-elif {$14==2}
+fine=0
+mid=$9
+large=0
+--iain_denoise_2019_beta3 $1,$2,$3,$4,$5,$6,$7,$fine,$mid,$large,$11,$12,$13,$14,$15
+-k[0,-1]
+-sub
+noise_amp={_round((128/(max(abs(im),iM))),0.1)}
+-mul $noise_amp
+-add 128
+-c 0,255
+-elif {$14==3}
+fine=0
+mid=0
+large=$10
+--iain_denoise_2019_beta3 $1,$2,$3,$4,$5,$6,$7,$fine,$mid,$large,$11,$12,$13,$14,$15
+-k[0,-1]
+-sub
+noise_amp={_round((128/(max(abs(im),iM))),0.1)}
+-mul $noise_amp
+-add 128
+-c 0,255
+-elif {$14==4}
+-iain_denoise_2019_beta3 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15
+-endif
+
+-endl
+
+
+-blend alpha
+
+text_size=13
+ 
+ -if {$images==1} 
+ guide="Internal Guide" 
+ bg_colour=255
+ text_colour=0
+ -else 
+ guide="External Guide"
+ bg_colour=0
+ text_colour=255
+  -endif
+  
+ -if {$14!=4}
+box_size=100%
+-else
+box_size=100%
+-endif
+
+-rectangle 0,0,$box_size,20,0.5,$bg_colour
+-text $guide,0.1~,4,$text_size,1,$text_colour
+ -if {$14!=4}
+
+ -rectangle {(w/2)-127*($noise_amp/2)},{h-20},{(w/2)+127*($noise_amp/2)},100%,0.5,$bg_colour
+-text Noise\ amplified\ $noise_amp\ times,0.5~,{h-16},$text_size,1,$text_colour
+
+-endif
+
+guide_recovery=0
+-if {$12==0}
+do_recovery=0
+-elif  {$12==1}
+do_recovery=1
+slow=0
+recover_text="Fast Recovery"
+-elif  {$12==2}
+do_recovery=1
+slow=1
+recover_text="Slow Recovery"
+-elif  {$12==3}
+do_recovery=1
+slow=1
+guide_recovery=1
+recover_text="Guide Recovery"
+-endif
+ -if {$12!=0}
+-text $recover_text,0.9~,4,$text_size,1,$text_colour 
+-endif
+
+
+## -if {$images==1}
+
+	## -if {$14<4}
+	## 
+	## -endif
+## -elif {$images==2}
+## -text "external guide",10,10,16,1,0 
+## -endif
+
+
+
+
+# # # # # 
+
+iain_denoise_2019_beta3:
+images={$!}
+-if {$images>2}
+-quit
+-endif
+
 gamma=$1
 shadow=$2
 light=$3
-chroma=$4
-median=$5
-std_deviation_s=10
-fine=$6
-mid={$7/3}
-large={$8/9}
-
-patch_size=5
+mid_tone_offset={$4/5}
+chroma=$5
+external_guide_strength=$6
+soften_guide=$7
+fine=$8
+mid={$9/3}
+large={$10/9}
+patch_size=3
 patch_size_b=3
-lookup_size=$9
+lookup_size={($11*2)+1}
+mid_lookup_size=$11
+large_lookup_size=$11
 smoothness_fine=0
 smoothness=0
-fast_approx=0
+fast_approx=0 
+std_deviation_s=10
 
-recover=$10
-slow=$11
+recover=$13
+
+
+guide_recovery=0
+slow=0
+-if {$12==0}
+do_recovery=0
+-elif  {$12==1}
+do_recovery=1
+-elif  {$12==2}
+do_recovery=1
+slow=1
+-elif  {$12==3}
+do_recovery=1
+slow=1
+guide_recovery=1
+-endif
+
+
+
+
+
+
 
 -remove_opacity
 
+external_guide=1
+
+
 -if {$!==1}
 [0]
+external_guide=0
 -endif
+-if {$guide_recovery==0}
 
--l[-1]
-#process guide image
-	# adjust chroma to increase chroma denoising. Use faster approximation of Ycbcr.
-
-	-if {$chroma>0}
-	redmul=.299
-	greenmul=.587
-	bluemul=.114
-	--split[0] c
-	-mul[1] $redmul -mul[2] $greenmul -mul[3] $bluemul
-	-add[1-3]
-	-if {$chroma==1} # if chroma equals one just keep the lumanance image else desaturate image by scaling the chroma channels
-	-keep[1]
-	-else
-
-	-split[0] c -name[0] red -name[1] green -name[2] blue -name[3] luma
-
-	--sub[blue] [luma] -name[-1] cb
-	--sub[red] [luma] -name[-1] cr
-	-keep[luma,cb,cr]
-
-	# adjust chroma
-	-mul[cb,cr] {1-$chroma}
-
-	--add[cb] [luma] -name[-1] blueout
-	--add[cr] [luma] -name[-1] redout
-
-	-remove[1,2]
-
-	--mul[redout] $redmul --mul[blueout] $bluemul
-	-sub[luma] [-1] -sub[luma] [-2]
-	-div[luma] $greenmul
-	-remove[-1,-2]
-	-move[2] 0
-	-append c
-	-endif
+	-if {$external_guide_strength<1}
+	[0]
+	-mul[1] $external_guide_strength
+	-mul[2] {1-$external_guide_strength}
+	-add[1,2]
 	-endif
 
-# adjust gamma and cruves to target differnt ranges for noise reducation
 
--sub 127
--div 128
--if {$gamma!=1}
--add 1
--pow $gamma
--sub 1
--endif
---c[0] 0,100
--c[0] -100,0
--l[0]
--if {$shadow>0}
--fill i+($shadow*abs(i)*0.75)^2
--elif {$shadow<0}
--fill i-(abs(i)^3)*(abs($shadow))
--endif
--endl
--l[1]
--if {$light>0}
+	-l[-1]
+	#process guide image
+		# adjust chroma to increase chroma denoising. 
+		# Use faster approximation of Ycbcr.
 
-max={iM}
--div[0] $max
--fill i-($light*abs(i)*0.75)^2
--mul[0] $max
--elif {$light<0}
-max={iM}
--div[0] $max
--fill i+(abs(i)^3)*(abs($light))
--mul[0] $max
--endif
--endl
--add
--mul 128
--add 127
--endl
+		-if {$chroma>0}
+		redmul=.299
+		greenmul=.587
+		bluemul=.114
+		--split[0] c
+		-mul[1] $redmul -mul[2] $greenmul -mul[3] $bluemul
+		-add[1-3]
+		-if {$chroma==1} # if chroma equals one just keep the lumanance image else desaturate image by scaling the chroma channels
+		-keep[1]
+		-else
+		
+		-split[0] c -name[0] red -name[1] green -name[2] blue -name[3] luma
 
-#denoise
+		--sub[blue] [luma] -name[-1] cb
+		--sub[red] [luma] -name[-1] cr
+		-keep[luma,cb,cr]
 
---l[0,1]
-levels=2
-size={3^$levels}
-cropwidth={w}
-cropheight={h}
+		# adjust chroma
+		-mul[cb,cr] {1-$chroma}
 
--to_rgb
--resize {w+($size-w%$size)},{h+($size-h%$size)},{d},{s},0,1
+		--add[cb] [luma] -name[-1] blueout
+		--add[cr] [luma] -name[-1] redout
 
-	-if {$fine>0}
-	-denoise[0] [1],$std_deviation_s,$fine,$patch_size,$lookup_size,$smoothness_fine,$fast_approx
+		-remove[1,2]
+
+		--mul[redout] $redmul --mul[blueout] $bluemul
+		-sub[luma] [-1] -sub[luma] [-2]
+		-div[luma] $greenmul
+		-remove[-1,-2]
+		-move[2] 0
+		-append c
+		-endif
+		-endif
+
+	# adjust gamma and curves to target different ranges for noise reducation
+
+
+	-sub 127
+	-div 128
+	-if {$gamma!=1}
+	-add 1
+	-pow $gamma
+	-sub 1
+	
 	-endif
---resize[0,1] 33.33333%,33.33333%,{d},{s},2
--rm[1]
---iain_resize_x3[-2]
--blur[-1] 1
--sub[0,-1]
-	-if {$mid>0}
-	-denoise[1] [2],$std_deviation_s,$mid,$patch_size,$lookup_size,$smoothness_fine,$fast_approx
+	-sub $mid_tone_offset
+	--c[0] 0,100
+	-c[0] -100,0
+	-l[0]
+	-if {$shadow>0}
+	-fill i+($shadow*abs(i)*0.75)^2
+	-elif {$shadow<0}
+	-fill i-(abs(i)^3)*(abs($shadow))
 	-endif
-	-l[1,2]
-	--resize[0,1] 33.33333%,33.33333%,{-1,d},{-1,s},2
+	-endl
+	-l[1]
+	-if {$light>0}
+
+
+	-div[0] {(2^$gamma)-1}
+	-fill i-($light*abs(i)*0.75)^2
+	-mul[0] {(2^$gamma)-1}
+	-elif {$light<0}
+	-div[0] {(2^$gamma)-1}
+	-fill i+(abs(i)^3)*(abs($light))
+	-mul[0] {(2^$gamma)-1}
+	-endif
+	-endl
+	-add
+		-add $mid_tone_offset
+	-mul 128
+	-add 127
+	
+	
+	
+	
+	-if $soften_guide
+	
+	-l[0]
+	(0,0.2,0;0.2,0.2,0.2;0,0.2,0)
+	-convolve[0] [1]
+	-rm[1]
+	-endl
+	-endif
+	-endl
+
+
+
+
+
+	#denoise
+
+	--l[0,1]
+	levels=2
+	size={3^$levels}
+	cropwidth={w}
+	cropheight={h}
+
+	-to_rgb
+	-resize {w+($size-w%$size)},{h+($size-h%$size)},{d},{s},0,1
+
+		-if {$fine>0}
+		-denoise[0] [1],$std_deviation_s,$fine,$patch_size,$lookup_size,$smoothness_fine,$fast_approx
+		-endif
+	--resize[0,1] 33.33333%,33.33333%,{d},{s},2
 	-rm[1]
 	--iain_resize_x3[-2]
 	-blur[-1] 1
-	-sub[0,-1]
-		-if {$large>0}
-		-denoise[1] [2],$std_deviation_s,$large,$patch_size,$lookup_size,$smoothness_fine,$fast_approx
+	-sub[0,-1] 
+		-if {$mid>0}
+		-denoise[1] [2],$std_deviation_s,$mid,$patch_size,$mid_lookup_size,$smoothness_fine,$fast_approx
 		-endif
+		-l[1,2]
+		--resize[0,1] 33.33333%,33.33333%,{-1,d},{-1,s},2
+		-rm[1]
+		--iain_resize_x3[-2]
+		-blur[-1] 1
+		-sub[0,-1] 
+			-if {$large>0}
+			-denoise[1] [2],$std_deviation_s,$large,$patch_size,$large_lookup_size,$smoothness_fine,$fast_approx
+			-endif
+		-endl
+	-rm[-1]
+	-repeat 2
+	-iain_resize_x3[-1]
+	-blur[-1] 1
+	-add[-1,-2]
+	-done
+	-crop 0,0,{$cropwidth-1},{$cropheight-1} # crop to original
+	-c 0,255
 	-endl
--rm[-1]
--repeat 2
--iain_resize_x3[-1]
--blur[-1] 1
--add[-1,-2]
--done
--crop 0,0,{$cropwidth-1},{$cropheight-1} # crop to original
--c 0,255
--endl
+-rm[1]
+-endif
 
 # recover
--rm[1]
- -if {$recover>0&&$5}
+
+ -if $do_recovery
 -sub[0] [1]
- -l[0]
-	-l[-1] -split c -mul[0] 0.2126 -mul[1] 0.7125 -mul[2] 0.0722 -add -endl
-	--blur[-1] 10
-	-sub[-2] [-1]
+ ## -l[0]
+	-l[0] -split c -mul[0] 0.2126 -mul[1] 0.7125 -mul[2] 0.0722 -add -endl
+	--blur[0] 10
+	-sub[0] [-1]
 	-rm[-1]
-	--abs[-1]
+	--abs[0]
+	noise={-1,ia}
 	-blur[-1] 3
-	-bilateral[-1] [0],10,10
+	-bilateral[-1] [1],20,$noise
+	-blur[-1] 2
 	-fill[-1] 5/i
-	-mul[-2] [-1]
-	-l[-2]
+	-mul[0] [-1]
+	-l[0]
 		-add 128
 		-resize[0] {w+256},{h+256},1,1,0,2,0.5,0.5
 			-if $slow
@@ -2424,9 +3579,9 @@ cropheight={h}
 		--blur 10
 		-sub
 	-endl
--endl
--div[0] [1]
--rm[1]
+
+-div[0] [-1]
+-rm[-1]
 -to_rgb[0]
 -add
 -else
@@ -8695,18 +9850,21 @@ total_tiles=$h_tiles*$w_tiles
 -gt 128
 -mul 255
 
-#@gui Turbulent Halftone: iain_turbulent_halftone_preview, iain_turbulent_halftone(0)
+#@gui Turbulent Halftone: iain_turbulent_halftone, iain_turbulent_halftone_preview(0)
 #@gui : Amplitude = float(15,0,30)
 #@gui : Smoothness = float(20,0,40)
 #@gui : Orientation = float(0,0,180)
 #@gui : Deviation = float(1,0,1)
 #@gui : Tile Size = int(512,128,2048)
-#@gui : Blur = float(0.75,0,4)
+#@gui : Blob Size = float(0.75,0,4)
 #@gui : Colour Model = choice("RGB","CMYK","Luminance")
 #@gui : Enhance Detail = float(0,0,10)
-#@gui : sep = separator(), note = note("<small>Author: <i>Iain Fergusson</i>.      Latest update: <i>2018/08/24</i>.</small>")
+#@gui : Oversample = bool(0)
+#@gui : sep = separator(), note = note("Author: Iain Fergusson.      Latest update: 2019/09/20 - Improved quality and added oversample.")
+#@gui : note = note("<small>Older updates: 2018/08/24.</small>")
 
 iain_turbulent_halftone:
+-repeat $! -local[$>]
 -if {$8>0}
 --iain_fast_denoise $8,0,1,0,0
 -sub[1] [0]
@@ -8715,8 +9873,7 @@ iain_turbulent_halftone:
 -endif
 -if {$7==1}
 -rgb2cmyk
--endif
--if {$7==2}
+-elif {$7==2}
 -luminance
 -endif
 -split c
@@ -8734,9 +9891,13 @@ $tsize,$tsize
 -crop[-1] 0,0,{0,w},{0,h}
 -keep[-1]
 -endl
-## --fx_seamless_turbulence $1,$2,$3,$4,.25,0
 -blur[-1] $6
+-l[-1] --blur 10 -sub -endl
+-n[-1] 0,255
 -equalize[-1] 256
+-if $9
+-resize 400%,400%,100%,100%,3
+-endif
 -blend alpha,0.5,1
 -gt 128
 -mul 255
@@ -8745,10 +9906,13 @@ $tsize,$tsize
 -if {$7==1}
 -cmyk2rgb
 -endif
-
+-if $9
+-resize 25%,25%,100%,100%,3
+-endif
+ -endlocal -done
+ 
  iain_turbulent_halftone_preview:
-
--iain_turbulent_halftone $1,$2,$3,$4,{0,w},$6,$7,$8
+-iain_turbulent_halftone_local $1,$2,$3,$4,{0,w},$6,$7,$8,$9
 
 #@gui Halftone Shapes: iain_halftone_shapes, iain_halftone_shapes(0)
 #@gui : Scale = float(100,5,200)

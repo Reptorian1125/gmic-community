@@ -14,13 +14,13 @@
 #                ( http://tschumperle.users.greyc.fr/ )
 #
 #  License     : CeCILL v2.0
-#                ( http://www.cecill.info/licences/Licence_CeCILL_V2-en.html )
+#                ( http://cecill.info/licences/Licence_CeCILL_V2-en.html )
 #
 #  This software is governed by the CeCILL  license under French law and
 #  abiding by the rules of distribution of free software.  You can  use,
 #  modify and/ or redistribute the software under the terms of the CeCILL
 #  license as circulated by CEA, CNRS and INRIA at the following URL
-#  "http://www.cecill.info".
+#  "http://cecill.info".
 #
 #  As a counterpart to the access to the source code and  rights to copy,
 #  modify and redistribute granted by the license, users are provided only
@@ -403,7 +403,7 @@ gui_split_preview "-fx_hard_painting $*",${-3--1}
 #@gui : 4. Min Threshold = float(40,0,100)
 #@gui : 5. Max Threshold = float(60,0,100)
 #@gui : 6. Negative = bool(0)
-#@gui : 7. Opacity = float(1,0,1)
+#@gui : 7. Opacity Over Original = float(1,0,1)
 #@gui : 8. Saturation = float(1.15,0,4)
 #@gui : 9. Blur Colours = float(2,0,20)
 #@gui : sep = separator(), note = note("Antialias")
@@ -474,7 +474,7 @@ rgb2hsl[1-3] s[1-3] c
 *[8] 0
 a[1-3] c a[2-4] c a[3-5] c hsl2rgb[1-3]
 replace_inf 1 replace_nan 0
-blend add,$7
+blend add
 if $23
 rgb2ycbcr s c b[1,2] {$23%*100} a c ycbcr2rgb
 fi
@@ -1612,14 +1612,14 @@ fx_shifter_preview:
 gui_split_preview "fx_shifter $*",${-3--1}
 
 #@gui Spiral Matrix Transformation : fx_jr_spiral_transform, fx_jr_spiral_transform_preview(1)
-#@gui : note = note("<small>Transforms images into rectangular spirals. The main use is to run effects on the transformed images and then use a corresponding reverse transformation for unusual effects. Preview may be highly-inaccurate. Based off an unfinished script from the <a href="https://forums.getpaint.net/topic/30276-glitch-effect-plugin-polyglitch-v14b/">PolyGlitch Paint.NET plugin</a>.</small>")
+#@gui : note = note("<small>Transforms images into rectangular spirals. The main use is to run effects on the transformed images and then use a corresponding reverse transformation for unusual effects. Preview may be highly-inaccurate. Based off an unfinished script from the <a href="https://forums.getpaint.net/topic/30276-glitch-effect-plugin-polyglitch-v14b/">PolyGlitch Paint.NET plugin</a>.</small>\n\n Details of the Spiral Matrix Transform workings can be found in this thread - <i><a href="https://discuss.pixls.us/t/challenge-spiralbw-as-a-parametric-function-x-t-y-t/12779">Challenge: Spiralbw as a parametric function (x(t),y(t))</a></i>.")
 #@gui : sep  = separator()
 #@gui : Mode = choice("Spiral","Inverse Spiral")
 #@gui : Spiral Rotation = choice("Clockwise","Anticlockwise")
 #@gui : Direction = choice("Down","Up")
 #@gui : Starting Axis = choice("X","Y")
 #@gui : Spiral Start = choice("Outside","Inside")
-#@gui : sep  = separator(), note = note("<small>Author: Reptorian, Joan Rake and Garagecoder. Latest Update: <i>2019/5/28</i>.</small>")
+#@gui : sep  = separator(), note = note("<small>Author: Reptorian, <i><a href="http://bit.ly/2CmhX65">David Tschumperl&#233;</a></i>.,Joan Rake and Garagecoder. Latest Update: <i>2019/5/28</i>.</small>")
 fx_jr_spiral_transform:
 repeat $! l[$>]
 if $4 permute yxzc fi
